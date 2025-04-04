@@ -1,4 +1,4 @@
-# 🧪 SmartLab Data Analysis
+# 🧪 SmartLab Blood Test Data Analysis
 
 ## Overview
 SmartLab Data Analysis is a powerful tool designed to analyze laboratory test results. It processes CSV files, calculates Z-scores, assigns grades, and provides visual insights into the data.
