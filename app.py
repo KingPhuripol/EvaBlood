@@ -6,7 +6,7 @@ import seaborn as sns
 
 # Page configuration
 st.set_page_config(
-    page_title="SmartLab Data Analysis",
+    page_title="SmartLab Blood Test Data Analysis",
     page_icon=":microscope:",
     layout="wide"
 )
