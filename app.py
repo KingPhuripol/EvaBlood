@@ -3,10 +3,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import base64
 
 # Page configuration
 st.set_page_config(
-    page_title="SmartLab Blood Test Data Analysis",
+    page_title="SmartLab Data Analysis",
     page_icon=":microscope:",
     layout="wide"
 )
@@ -41,6 +42,19 @@ st.markdown("""
     }
     .stDataFrame {
         width: 100%;
+    }
+    .calculation-box {
+        background-color: #e8f4f8;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 10px;
+        border-left: 4px solid #3498db;
+    }
+    .formula {
+        font-family: monospace;
+        background-color: #f8f9fa;
+        padding: 4px 8px;
+        border-radius: 4px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -98,11 +112,19 @@ if uploaded_file is not None:
         """, unsafe_allow_html=True)
     
     # Calculate statistics before processing
+    stats_dict = {}
+    for col in numeric_cols:
+        stats_dict[col] = {
+            'mean': meandata[col].mean(),
+            'std': meandata[col].std(),
+            'count': meandata[col].count()
+        }
+    
     stats_df = pd.DataFrame({
         'Test': numeric_cols,
-        'Average': [meandata[col].mean() for col in numeric_cols],
-        'Std Dev': [meandata[col].std() for col in numeric_cols],
-        'Count': [meandata[col].count() for col in numeric_cols]
+        'Average': [stats_dict[col]['mean'] for col in numeric_cols],
+        'Std Dev': [stats_dict[col]['std'] for col in numeric_cols],
+        'Count': [stats_dict[col]['count'] for col in numeric_cols]
     }).round(2)
     
     # Show statistics
@@ -125,9 +147,22 @@ if uploaded_file is not None:
     for col in numeric_cols:
         new_columns.extend([col, f'{col}_zscore', f'{col}_grade'])
     
+    # Store calculation details in a separate DataFrame
+    calc_details = pd.DataFrame(index=meandata.index)
+    
     for col in numeric_cols:
-        meandata[f'{col}_zscore'] = (meandata[col] - meandata[col].mean()) / meandata[col].std()
+        mean_val = stats_dict[col]['mean']
+        std_val = stats_dict[col]['std']
+        
+        meandata[f'{col}_zscore'] = (meandata[col] - mean_val) / std_val
         meandata[f'{col}_zscore'] = meandata[f'{col}_zscore'].round(2)
+        
+        # Store calculation details
+        calc_details[f'{col}_calculation'] = meandata.apply(
+            lambda row: f"Z-Score = ({row[col]} - {mean_val:.2f}) / {std_val:.2f} = {row[f'{col}_zscore']}" 
+            if not pd.isna(row[col]) else "No data available", 
+            axis=1
+        )
     
     def assign_grade(zscore):
         if pd.isna(zscore):
@@ -146,6 +181,18 @@ if uploaded_file is not None:
     
     for col in numeric_cols:
         meandata[f'{col}_grade'] = meandata[f'{col}_zscore'].apply(assign_grade)
+        
+        # Store grade explanation
+        calc_details[f'{col}_grade_explanation'] = meandata.apply(
+            lambda row: f"Grade '{row[f'{col}_grade']}' assigned because |{row[f'{col}_zscore']}| " +
+                       (f"≤ 0.5" if row[f'{col}_grade'] == "Excellent" else
+                        f"is between 0.5 and 1.0" if row[f'{col}_grade'] == "Good" else
+                        f"is between 1.0 and 2.0" if row[f'{col}_grade'] == "Satisfactory" else
+                        f"is between 2.0 and 3.0" if row[f'{col}_grade'] == "Unsatisfactory" else
+                        f"> 3.0" if row[f'{col}_grade'] == "Serious problem" else "")
+            if not pd.isna(row[f'{col}_zscore']) else "No data available for grading",
+            axis=1
+        )
     
     meandata = meandata[new_columns]
     
@@ -175,6 +222,44 @@ if uploaded_file is not None:
     
     st.dataframe(styled_df, height=400, use_container_width=True)
     
+    # NEW: Detailed calculation viewer section
+    st.markdown('<div class="subheader-style">Detailed Calculation Viewer</div>', unsafe_allow_html=True)
+    
+    # Create selection widgets for Lab Code and Test
+    row1, row2 = st.columns(2)
+    selected_lab = row1.selectbox("Select Lab Code", options=meandata['Lab Code'].unique())
+    
+    test_options = [col for col in numeric_cols]
+    selected_test = row2.selectbox("Select Test", options=test_options)
+    
+    if selected_lab and selected_test:
+        lab_index = meandata[meandata['Lab Code'] == selected_lab].index[0]
+        test_value = meandata.loc[lab_index, selected_test]
+        z_score = meandata.loc[lab_index, f'{selected_test}_zscore']
+        grade = meandata.loc[lab_index, f'{selected_test}_grade']
+        
+        # Get calculation details
+        calculation = calc_details.loc[lab_index, f'{selected_test}_calculation']
+        grade_explanation = calc_details.loc[lab_index, f'{selected_test}_grade_explanation']
+        
+        # Display detailed calculation
+        st.markdown(f"""
+        <div class="calculation-box">
+            <h4>Detailed Calculation for Lab {selected_lab}, Test: {selected_test}</h4>
+            
+        <p><b>Raw Value:</b> {f"{test_value:.2f}" if not pd.isna(test_value) else "No data"}</p>
+        <p><b>Test Statistics:</b> Mean = {stats_dict[selected_test]['mean']:.2f}, Standard Deviation = {stats_dict[selected_test]['std']:.2f}</p>
+            
+        <p><b>Z-Score Calculation:</b><br>
+        <span class="formula">{calculation}</span></p>
+            
+        <p><b>Grade Determination:</b><br>
+        <span class="formula">{grade_explanation}</span></p>
+            
+        <p><b>Final Grade:</b> {grade}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
     # Visualization
     st.markdown('<div class="subheader-style">Visual Analysis</div>', unsafe_allow_html=True)
     
@@ -203,14 +288,53 @@ if uploaded_file is not None:
         plt.title('Z-Score Distribution by Test')
         st.pyplot(fig)
     
+    # Add calculation details to download
+    # Create a combined DataFrame with original data and calculation details
+    download_df = meandata.copy()
+    
+    # Add calculation details to the download DataFrame
+    for col in numeric_cols:
+        download_df[f'{col}_calculation_details'] = calc_details[f'{col}_calculation']
+        download_df[f'{col}_grade_explanation'] = calc_details[f'{col}_grade_explanation']
+    
     # Download button
     st.download_button(
-        label="📥 Download Full Analysis Report",
-        data=meandata.to_csv(index=False).encode('utf-8'),
+        label="📥 Download Full Analysis Report (Including Calculations)",
+        data=download_df.to_csv(index=False).encode('utf-8'),
         file_name='smartlab_analysis_report.csv',
         mime='text/csv',
         use_container_width=True
     )
+    
+    # Generate a detailed PDF report with calculations for selected lab
+    st.markdown('<div class="subheader-style">Export Detailed Calculation Report</div>', unsafe_allow_html=True)
+    
+    export_lab = st.selectbox("Select Lab for Detailed Report", options=meandata['Lab Code'].unique(), key="export_lab")
+    
+    if st.button("Generate Detailed Report for Selected Lab"):
+        st.markdown(f"### Detailed Calculations for Lab: {export_lab}")
+        lab_data = meandata[meandata['Lab Code'] == export_lab]
+        lab_index = lab_data.index[0]
+        
+        for col in numeric_cols:
+            test_value = lab_data.iloc[0][col]
+            z_score = lab_data.iloc[0][f'{col}_zscore']
+            grade = lab_data.iloc[0][f'{col}_grade']
+            
+            calculation = calc_details.loc[lab_index, f'{col}_calculation']
+            grade_explanation = calc_details.loc[lab_index, f'{col}_grade_explanation']
+            
+            st.markdown(f"""
+            <div class="calculation-box">
+                <h4>Test: {col}</h4>
+                <p><b>Raw Value:</b> {f"{test_value:.2f}" if not pd.isna(test_value) else "No data"}</p>
+                <p><b>Z-Score Calculation:</b><br>
+                <span class="formula">{calculation}</span></p>
+                <p><b>Grade Determination:</b><br>
+                <span class="formula">{grade_explanation}</span></p>
+                <p><b>Final Grade:</b> {grade}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 else:
     st.info("ℹ️ Please upload a CSV file to begin analysis. The app will calculate z-scores and grades for all numeric test values.")
